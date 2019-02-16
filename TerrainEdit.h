@@ -38,18 +38,29 @@ struct MaskSettings
 
 };
 
+enum
+{
+	HeightReplace,
+	HeightAdd,
+	HeightSubtract,
+	HeightMultiply,
+	HeightMin,
+	HeightMax
+};
+
 class TerrainEdit// : public Object
 {
     //URHO3D_OBJECT(TerrainEdit, Object);
 public:
     //TerrainEdit(Context *context);
     TerrainEdit();
-	
+
 	void ResizeTerrain(int tw, int th, bool use16bit);
     bool Initialize(Scene *scene, int tw, int th, int bw, int bh, Vector3 spacing, bool use16bit=true);
     void SetTerrainSize(int w, int h, Vector3 spacing, bool use16bit=true);
     void SetBlendMaskSize(int w, int h);
     void SetTerrainSpacing(Vector3 spacing);
+	void ClearTerrain();
 
     Vector2 WorldToNormalized(Vector3 world);
     Vector3 NormalizedToWorld(Vector2 normalized);
@@ -65,6 +76,10 @@ public:
     void SetHeightValue(int x, int y, float val);
     float GetHeightValue(int x, int y);
 	float GetHeightValueFromNormalized(Vector2 nrm);
+
+	void SetWaterValue(int x, int y, float val);
+    float GetWaterValue(int x, int y);
+	float GetWaterValueFromNormalized(Vector2 nrm);
 
     int GetTerrainWidth()
     {
@@ -90,15 +105,23 @@ public:
     float GetHeightValue(Vector3 worldpos);
 	void GetHeightMap(CArray2Dd &buffer);
 
-    void SetHeightBuffer(CArray2Dd &buffer, MaskSettings &masksettings);
+	float GetWaterValue(Vector3 worldpos);
+	void GetWaterMap(CArray2Dd &buffer);
+
+    void SetHeightBuffer(CArray2Dd &buffer, MaskSettings &masksettings, int blendop);
+	void SetWaterBuffer(CArray2Dd &buffer, MaskSettings &masksettings, int blendop);
     void SetLayerBuffer(CArray2Dd &buffer, int layer, MaskSettings &masksettings);
     void SetLayerBufferMax(CArray2Dd &buffer, int layer, MaskSettings &masksettings);
     void BlendHeightBuffer(CArray2Dd &buffer, CArray2Dd &blend, MaskSettings &masksettings);
 	void SetMaskBuffer(CArray2Dd &buffer, int which);
 
     void ApplyHeightBrush(float x, float z, float dt, BrushSettings &brush, MaskSettings &masksettings);
+	void ApplyHeightBrushAlpha(float x, float z, float dt, BrushSettings &brush, MaskSettings &masksettings, Image &alpha, float angle);
+	void ApplyWaterBrush(float x, float z, float dt, BrushSettings &brush, MaskSettings &masksettings);
     void ApplyBlendBrush(float x, float z, int layer, float dt, BrushSettings &brush, MaskSettings &masksettings);
+	void ApplyBlendBrushAlpha(float x, float z, int layer, float dt, BrushSettings &brush, MaskSettings &masksettings, Image &alpha, float angle);
     void ApplyMaskBrush(float x, float z, int which, float dt, BrushSettings &brush, MaskSettings &masksettings);
+	void ApplyMaskBrushAlpha(float x, float z, int which, float dt, BrushSettings &brush, MaskSettings &masksettings, Image &alpha, float angle);
     void ApplySmoothBrush(float x, float z, float dt, BrushSettings &brush, MaskSettings &masksettings);
 
     void SetBrushCursorHeight(CustomGeometry *brush, float groundx, float groundz);
@@ -122,37 +145,77 @@ public:
     {
         return terrain_;
     }
+
+	Material *GetWaterMaterial()
+	{
+		return waterMaterial_;
+	}
+
+	Terrain *GetWater()
+	{
+		return water_;
+	}
+
     void SetMaterialSettings(bool triplanar, bool smoothing, bool normalmapping, bool reduce);
 
     void SaveHeightMap(const String &filename);
+	void SaveWaterMap(const String &filename);
     void SaveBlend0(const String &filename);
     void SaveBlend1(const String &filename);
     void SaveMask(const String &filename);
 
     void LoadHeightMap(const String &filename);
+	void LoadWaterMap(const String &filename);
     void LoadBlend0(const String &filename);
     void LoadBlend1(const String &filename);
     void LoadMask(const String &filename);
 
     void GetSteepness(CArray2Dd &buffer, float threshold, float fade);
 	void GetCavityMap(CArray2Dd &buffer, float sampleradius, float scale, float bias, float intensity, unsigned int iterations);
-	
+	void GetCavityMap2(CArray2Dd &buffer, int radius);
 	Vector3 GetTerrainSpacing();
 	void SaveTerrainNormalMap(const String &filename);
+
+	void BuildWaterDepthTexture();
+
+	Texture2D *GetHeightTex(){return heightTex_;}
 
 protected:
     Node *terrainNode_;
     Terrain *terrain_;
     Material *material_;
 
-    Image *hmap_, *blend0_, *blend1_, *mask_;
+	Node *waterNode_;
+	Terrain *water_;
+	Material *waterMaterial_;
+
+    Image *hmap_, *waterMap_, *blend0_, *blend1_, *mask_, *waterdepth_;
     SharedPtr<Texture2D> blendtex0_, blendtex1_, masktex_;
+	SharedPtr<Texture2D> waterdepthtex_;
+	SharedPtr<Texture2D> heightTex_;
 
     bool use16bit_;
     bool triplanar_, smoothing_, normalmapping_;
-	
+
 	float DoAmbientOcclusion(Vector2 tcoord, Vector2 uv, Vector3 p, Vector3 cnorm, float scale, float bias, float intensity);
+	float DoAmbientOcclusion2(int x, int y, int radius);
 };
+
+void FillBasins(CArray2Dd &arr, float E);
+
+
+
+
+
+
+
+
+
+
+
+
+
+/////////////////////// Deprecated
 
 Vector2 WorldToNormalized(Image *height, Terrain *terrain, Vector3 world);
 Vector3 NormalizedToWorld(Image *height, Terrain *terrain, Vector2 normalized);

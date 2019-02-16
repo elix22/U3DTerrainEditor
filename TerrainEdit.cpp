@@ -143,17 +143,42 @@ float CalcSmooth(Image *height, float *kernel, int kernelsize, int terrainx, int
     else return 0.0f;
 }
 
-TerrainEdit::TerrainEdit() : terrainNode_(0), terrain_(0), material_(0), use16bit_(true), triplanar_(true), smoothing_(false), normalmapping_(true) {}
+TerrainEdit::TerrainEdit() : terrainNode_(0), terrain_(0), material_(0), waterNode_(0), water_(0), waterMaterial_(0), use16bit_(true), triplanar_(true), smoothing_(false), normalmapping_(true) {}
 
 void TerrainEdit::ResizeTerrain(int tw, int th, bool use16bit)
 {
-	if(!terrain_ || !hmap_) return;
-	
+	if(!terrain_ || !water_ || !hmap_) return;
+
 	if(tw==hmap_->GetWidth() && th==hmap_->GetHeight()) return;
-	
+
 	hmap_->SetSize(tw, th, use16bit ? 3 : 1);
 	hmap_->Clear(Color(0,0,0));
 	terrain_->SetHeightMap(hmap_);
+
+	waterMap_->SetSize(tw, th, use16bit ? 3 : 1);
+	waterMap_->Clear(Color(0,0,0));
+	water_->SetHeightMap(waterMap_);
+
+	waterdepth_->SetSize(tw,th,1);
+}
+
+void TerrainEdit::BuildWaterDepthTexture()
+{
+	if(!waterdepth_ || !waterMap_ || !hmap_) return;
+	for(unsigned int x=0; x<waterdepth_->GetWidth(); ++x)
+	{
+		for(unsigned int y=0; y<waterdepth_->GetHeight(); ++y)
+		{
+			float nx=(float)x/(float)(waterdepth_->GetWidth());
+			float ny=(float)y/(float)(waterdepth_->GetHeight());
+			Vector2 nrm(nx,ny);
+			float ht=GetHeightValueFromNormalized(nrm);
+			float wat=GetWaterValueFromNormalized(nrm);
+			float v=std::max(0.0f, std::min(1.0f, (wat-ht)*16.0f));
+			waterdepth_->SetPixel(x,y,Color(v,0,0));
+		}
+	}
+	waterdepthtex_->SetData(waterdepth_,false);
 }
 
 bool TerrainEdit::Initialize(Scene *scene, int tw, int th, int bw, int bh, Vector3 spacing, bool use16bit)
@@ -163,26 +188,50 @@ bool TerrainEdit::Initialize(Scene *scene, int tw, int th, int bw, int bh, Vecto
     terrain_=terrainNode_->CreateComponent<Terrain>();
     terrain_->SetPatchSize(64);
     terrain_->SetSpacing(spacing);
-    terrain_->SetSmoothing(true);
+    terrain_->SetSmoothing(false);
+
+	if(waterNode_) waterNode_->Remove();
+	waterNode_=scene->CreateChild("Terrain");
+	water_=waterNode_->CreateComponent<Terrain>();
+	waterNode_->SetPosition(Vector3(0.0f,-0.1f,0.0f));
+	water_->SetPatchSize(64);
+	water_->SetSpacing(spacing);
+	water_->SetSmoothing(true);
 
     hmap_=new Image(scene->GetContext());
+	waterMap_=new Image(scene->GetContext());
     blend0_=new Image(scene->GetContext());
     blend1_=new Image(scene->GetContext());
     mask_=new Image(scene->GetContext());
+	waterdepth_=new Image(scene->GetContext());
 
     blend0_->SetSize(bw,bh,4);
     blend1_->SetSize(bw,bh,4);
     mask_->SetSize(bw,bh,3);
+	waterdepth_->SetSize(tw,th,1);
 
     use16bit_=true;
 
     hmap_->SetSize(tw, th, use16bit ? 3 : 1);
+	waterMap_->SetSize(tw,th,use16bit ? 3 : 1);
     terrain_->SetHeightMap(hmap_);
     terrain_->SetCastShadows(true);
-    material_=scene->GetSubsystem<ResourceCache>()->GetResource<Material>("Materials/TerrainEdit8TriplanarBump.xml");
+	water_->SetHeightMap(waterMap_);
+	water_->SetCastShadows(false);
+
+    material_=scene->GetSubsystem<ResourceCache>()->GetResource<Material>("Materials/TerrainEdit8TriplanarBumpReduce.xml");
     blendtex0_=new Texture2D(scene->GetContext());
     blendtex1_=new Texture2D(scene->GetContext());
     masktex_=new Texture2D(scene->GetContext());
+	waterdepthtex_=new Texture2D(scene->GetContext());
+	heightTex_=new Texture2D(scene->GetContext());
+
+	heightTex_->SetFilterMode(FILTER_NEAREST);
+
+
+	waterMaterial_=scene->GetSubsystem<ResourceCache>()->GetResource<Material>("Materials/FlowWater.xml");
+	waterMaterial_->SetTexture(TU_SPECULAR, waterdepthtex_);
+	water_->SetMaterial(waterMaterial_);
 
     mask_->Clear(Color(1.0f,1.0f,1.0f));
     blend0_->Clear(Color(1.0f,0.0f,0.0f,0.0f));
@@ -191,13 +240,15 @@ bool TerrainEdit::Initialize(Scene *scene, int tw, int th, int bw, int bh, Vecto
     blendtex0_->SetData(blend0_, false);
     blendtex1_->SetData(blend1_, false);
     masktex_->SetData(mask_, false);
+	waterdepthtex_->SetData(waterdepth_, false);
+	heightTex_->SetData(hmap_, false);
 
     material_->SetTexture(TU_DIFFUSE, blendtex0_);
     material_->SetTexture(TU_NORMAL, blendtex1_);
     material_->SetTexture(TU_ENVIRONMENT, masktex_);
     terrain_->SetMaterial(material_);
     SetBlendMaskSize(bw,bh);
-    SetMaterialSettings(true, false, true, false);
+    SetMaterialSettings(true, false, true, true);
 
     return true;
 }
@@ -207,6 +258,7 @@ void TerrainEdit::SetTerrainSpacing(Vector3 spacing)
     if(!terrain_) return;
 
     terrain_->SetSpacing(spacing);
+	water_->SetSpacing(spacing);
 }
 
 void TerrainEdit::SetTerrainSize(int w, int h, Vector3 spacing, bool use16bit)
@@ -216,6 +268,13 @@ void TerrainEdit::SetTerrainSize(int w, int h, Vector3 spacing, bool use16bit)
     hmap_->Clear(Color(0,0,0));
     terrain_->SetHeightMap(hmap_);
     terrain_->SetSpacing(spacing);
+
+	if(!water_) return;
+    hmap_->SetSize(w, h, use16bit ? 3 : 1);
+    hmap_->Clear(Color(0,0,0));
+    water_->SetHeightMap(hmap_);
+    water_->SetSpacing(spacing);
+	heightTex_->SetData(hmap_,false);
 }
 
 void TerrainEdit::SetBlendMaskSize(int w, int h)
@@ -233,6 +292,16 @@ void TerrainEdit::SetBlendMaskSize(int w, int h)
     blendtex0_->SetData(blend0_, false);
     blendtex1_->SetData(blend1_, false);
     masktex_->SetData(mask_, false);
+}
+
+void TerrainEdit::ClearTerrain()
+{
+	if(!hmap_) return;
+	hmap_->Clear(Color(0,0,0));
+	terrain_->SetHeightMap(hmap_);
+	waterMap_->Clear(Color(0,0,0));
+	water_->SetHeightMap(waterMap_);
+	heightTex_->SetData(hmap_, false);
 }
 
 Vector2 TerrainEdit::WorldToNormalized(Vector3 world)
@@ -315,6 +384,124 @@ IntVector2 TerrainEdit::NormalizedToTerrain(Vector2 norm)
     return IntVector2((int)(norm.x_ * (float)hmap_->GetWidth()), (int)(norm.y_ * (float)hmap_->GetHeight()));
 }
 
+void TerrainEdit::SetWaterValue(int x, int y, float val)
+{
+	if(!waterMap_) return;
+    if(waterMap_->GetComponents()==1) waterMap_->SetPixel(x,y,Color(val,0,0));
+    else
+    {
+        float expht=std::floor(val*255.0f);
+        float rm=val*255.0f-expht;
+        waterMap_->SetPixel(x,y,Color(expht/255.0f, rm, 0));
+    }
+}
+
+float TerrainEdit::GetWaterValue(int x, int y)
+{
+	if(!waterMap_) return 0.0f;
+    if(waterMap_->GetComponents()==1) return waterMap_->GetPixel(x,y).r_;
+    else
+    {
+        Color c=waterMap_->GetPixel(x,y);
+        return c.r_+c.g_/255.0f;
+    }
+}
+
+float TerrainEdit::GetWaterValueFromNormalized(Vector2 nrm)
+{
+	if(!waterMap_) return 0.0f;
+	if(waterMap_->GetComponents()==1) return waterMap_->GetPixelBilinear(nrm.x_, nrm.y_).r_;
+	else
+	{
+		Color c=waterMap_->GetPixelBilinear(nrm.x_,nrm.y_);
+		return c.r_+c.g_/255.0f;
+	}
+}
+
+float TerrainEdit::GetWaterValue(Vector3 worldpos)
+{
+    if(!water_) return 0.0f;
+    IntVector2 htm=water_->WorldToHeightMap(worldpos);
+    Color c=waterMap_->GetPixelBilinear((float)htm.x_ / (float)waterMap_->GetWidth(), (float)htm.y_ / (float)waterMap_->GetHeight());
+    if(waterMap_->GetComponents()==1) return c.r_;
+    else return c.r_+c.g_/255.0f;
+}
+
+void TerrainEdit::GetWaterMap(CArray2Dd &buffer)
+{
+	if(!waterMap_) return;
+	buffer.resize(waterMap_->GetWidth(), waterMap_->GetHeight());
+	for(int x=0; x<waterMap_->GetWidth(); ++x)
+	{
+		for(int y=0; y<waterMap_->GetHeight(); ++y)
+		{
+			Color c=waterMap_->GetPixel(x,y);
+			if(waterMap_->GetComponents()==1) buffer.set(x,y,c.r_);
+			else buffer.set(x,y,c.r_+c.g_/255.0f);
+		}
+	}
+}
+
+void TerrainEdit::SetWaterBuffer(CArray2Dd &buffer, MaskSettings &masksettings, int blendop)
+{
+    if(!water_) return;
+
+    //if(buffer.width()!=waterMap_->GetWidth() || buffer.height()!=waterMap_->GetWater()) return;
+    int w=waterMap_->GetWidth();
+    int h=waterMap_->GetHeight();
+
+    for(int x=0; x<=w; ++x)
+    {
+        for(int y=0; y<=h; ++y)
+        {
+            float nx=(float)x/(float)(w);
+            float ny=(float)y/(float)(h);
+
+            float v=buffer.getBilinear(nx,ny);
+            Color mask=mask_->GetPixelBilinear(nx,ny);
+            float oldheight=GetWaterValue(x,y);
+            float maskval=1.0f;
+
+            if(masksettings.usemask0)
+            {
+                float mval=mask.r_;
+                if(masksettings.invertmask0) mval=1.0f-mval;
+                maskval*=mval;
+            }
+            if(masksettings.usemask1)
+            {
+                float mval=mask.g_;
+                if(masksettings.invertmask1) mval=1.0f-mval;
+                maskval*=mval;
+            }
+            if(masksettings.usemask2)
+            {
+                float mval=mask.b_;
+                if(masksettings.invertmask2) mval=1.0f-mval;
+                maskval*=mval;
+            }
+
+			float newval=0.0f;
+
+			switch(blendop)
+			{
+				case HeightReplace: newval=v; break;
+				case HeightAdd: newval=oldheight+v; break;
+				case HeightSubtract: newval=oldheight-v; break;
+				case HeightMultiply: newval=oldheight*v; break;
+				case HeightMin: newval=std::min(v, oldheight); break;
+				case HeightMax: newval=std::max(v, oldheight); break;
+				default: newval=v; break;
+			}
+
+            v=oldheight+maskval*(newval-oldheight);
+            SetWaterValue(x,y,(float)v);
+        }
+    }
+    water_->SetHeightMap(waterMap_);
+	BuildWaterDepthTexture();
+}
+
 void TerrainEdit::SetHeightValue(int x, int y, float val)
 {
 	if(!hmap_) return;
@@ -373,7 +560,7 @@ void TerrainEdit::GetHeightMap(CArray2Dd &buffer)
 	}
 }
 
-void TerrainEdit::SetHeightBuffer(CArray2Dd &buffer, MaskSettings &masksettings)
+void TerrainEdit::SetHeightBuffer(CArray2Dd &buffer, MaskSettings &masksettings, int blendop)
 {
     if(!terrain_) return;
 
@@ -388,7 +575,7 @@ void TerrainEdit::SetHeightBuffer(CArray2Dd &buffer, MaskSettings &masksettings)
             float nx=(float)x/(float)(w);
             float ny=(float)y/(float)(h);
 
-            double v=buffer.getBilinear(nx,ny);
+            float v=buffer.getBilinear(nx,ny);
             Color mask=mask_->GetPixelBilinear(nx,ny);
             float oldheight=GetHeightValue(x,y);
             float maskval=1.0f;
@@ -412,11 +599,26 @@ void TerrainEdit::SetHeightBuffer(CArray2Dd &buffer, MaskSettings &masksettings)
                 maskval*=mval;
             }
 
-            v=oldheight+maskval*(v-oldheight);
+			float newval=0.0f;
+
+			switch(blendop)
+			{
+				case HeightReplace: newval=v; break;
+				case HeightAdd: newval=oldheight+v; break;
+				case HeightSubtract: newval=oldheight-v; break;
+				case HeightMultiply: newval=oldheight*v; break;
+				case HeightMin: newval=std::min(v, oldheight); break;
+				case HeightMax: newval=std::max(v, oldheight); break;
+				default: newval=v; break;
+			}
+
+            v=oldheight+maskval*(newval-oldheight);
             SetHeightValue(x,y,(float)v);
         }
     }
     terrain_->SetHeightMap(hmap_);
+	heightTex_->SetData(hmap_, false);
+	BuildWaterDepthTexture();
 }
 
 void TerrainEdit::SetMaskBuffer(CArray2Dd &buffer, int which)
@@ -645,6 +847,64 @@ void TerrainEdit::BlendHeightBuffer(CArray2Dd &buffer, CArray2Dd &blend, MaskSet
         }
     }
     terrain_->SetHeightMap(hmap_);
+	heightTex_->SetData(hmap_, false);
+}
+
+void TerrainEdit::ApplyWaterBrush(float x, float z, float dt, BrushSettings &brush, MaskSettings &masksettings)
+{
+    if(!water_) return;
+
+    Vector3 world=Vector3(x,0,z);
+    IntVector2 ht=water_->WorldToHeightMap(world);
+
+    int sz=(int)brush.radius+1;
+    int comp=waterMap_->GetComponents();
+    for(int hx=ht.x_-sz; hx<=ht.x_+sz; ++hx)
+    {
+        for(int hz=ht.y_-sz; hz<=ht.y_+sz; ++hz)
+        {
+            if(hx>=0 && hx<waterMap_->GetWidth() && hz>=0 && hz<waterMap_->GetHeight())
+            {
+                float dx=(float)(hx-ht.x_);
+                float dz=(float)(hz-ht.y_);
+                float d=std::sqrt(dx*dx+dz*dz);
+                float i=((d-brush.radius)/(brush.hardness*brush.radius-brush.radius));
+                i=std::max(0.0f, std::min(1.0f, i));
+                i=(float)std::sin(i*1.57079633);
+                i=i*dt*brush.power;
+                if(masksettings.usemask0)
+                {
+                    float m=mask_->GetPixelBilinear((float)(hx)/(float)(waterMap_->GetWidth()), (float)(hz)/(float)(waterMap_->GetHeight())).r_;
+                    if(masksettings.invertmask0) m=1.0f-m;
+                    i=i*m;
+                }
+                if(masksettings.usemask1)
+                {
+                    float m=mask_->GetPixelBilinear((float)(hx)/(float)(waterMap_->GetWidth()), (float)(hz)/(float)(waterMap_->GetHeight())).g_;
+                    if(masksettings.invertmask1) m=1.0f-m;
+                    i=i*m;
+                }
+                if(masksettings.usemask2)
+                {
+                    float m=mask_->GetPixelBilinear((float)(hx)/(float)(waterMap_->GetWidth()), (float)(hz)/(float)(waterMap_->GetHeight())).b_;
+                    if(masksettings.invertmask2) m=1.0f-m;
+                    i=i*m;
+                }
+                float hval=GetWaterValue(hx,hz);
+                float newhval=hval+(brush.max-hval)*i;
+                SetWaterValue(hx,hz,newhval);
+
+				float ht=GetHeightValue(hx,hz);
+				float v=std::max(0.0f, std::min(1.0f, (newhval-ht)*16.0f));
+				waterdepth_->SetPixel(hx,hz,Color(v,0,0));
+
+            }
+        }
+    }
+
+    water_->SetHeightMap(waterMap_);
+	//BuildWaterDepthTexture();
+	waterdepthtex_->SetData(waterdepth_,false);
 }
 
 void TerrainEdit::ApplyHeightBrush(float x, float z, float dt, BrushSettings &brush, MaskSettings &masksettings)
@@ -691,12 +951,87 @@ void TerrainEdit::ApplyHeightBrush(float x, float z, float dt, BrushSettings &br
                 float newhval=hval+(brush.max-hval)*i;
                 SetHeightValue(hx,hz,newhval);
 
+				float wt=GetWaterValue(hx,hz);
+				float v=std::max(0.0f, std::min(1.0f, (wt-newhval)*16.0f));
+				waterdepth_->SetPixel(hx,hz,Color(v,0,0));
+
             }
         }
     }
 
     terrain_->SetHeightMap(hmap_);
+	heightTex_->SetData(hmap_,false);
+	waterdepthtex_->SetData(waterdepth_,false);
 }
+
+void TerrainEdit::ApplyHeightBrushAlpha(float x, float z, float dt, BrushSettings &brush, MaskSettings &masksettings, Image &alpha, float angle)
+{
+    if(!terrain_) return;
+
+    Vector3 world=Vector3(x,0,z);
+    IntVector2 ht=terrain_->WorldToHeightMap(world);
+
+    int sz=(int)brush.radius+1;
+    int comp=hmap_->GetComponents();
+    for(int hx=ht.x_-sz; hx<=ht.x_+sz; ++hx)
+    {
+        for(int hz=ht.y_-sz; hz<=ht.y_+sz; ++hz)
+        {
+            if(hx>=0 && hx<hmap_->GetWidth() && hz>=0 && hz<hmap_->GetHeight())
+            {
+                float dx=(float)(hx-ht.x_);
+                float dz=(float)(hz-ht.y_);
+                float d=std::sqrt(dx*dx+dz*dz);
+                float i=((d-brush.radius)/(brush.hardness*brush.radius-brush.radius));
+                i=std::max(0.0f, std::min(1.0f, i));
+                i=(float)std::sin(i*1.57079633);
+
+				float anx=dx/brush.radius;
+				float any=dz/brush.radius;
+				float alphanx = anx*std::cos(angle) - any*std::sin(angle);
+				float alphany = any*std::cos(angle) + anx*std::sin(angle);
+				alphanx=alphanx*0.5+0.5;
+				alphany=alphany*0.5+0.5;
+				alphanx=std::max(0.0f, std::min(1.0f, alphanx));
+				alphany=std::max(0.0f, std::min(1.0f, alphany));
+				float alphapower=alpha.GetPixelBilinear(alphanx,alphany).r_;
+
+                i=i*dt*brush.power*alphapower;
+                if(masksettings.usemask0)
+                {
+                    float m=mask_->GetPixelBilinear((float)(hx)/(float)(hmap_->GetWidth()), (float)(hz)/(float)(hmap_->GetHeight())).r_;
+                    if(masksettings.invertmask0) m=1.0f-m;
+                    i=i*m;
+                }
+                if(masksettings.usemask1)
+                {
+                    float m=mask_->GetPixelBilinear((float)(hx)/(float)(hmap_->GetWidth()), (float)(hz)/(float)(hmap_->GetHeight())).g_;
+                    if(masksettings.invertmask1) m=1.0f-m;
+                    i=i*m;
+                }
+                if(masksettings.usemask2)
+                {
+                    float m=mask_->GetPixelBilinear((float)(hx)/(float)(hmap_->GetWidth()), (float)(hz)/(float)(hmap_->GetHeight())).b_;
+                    if(masksettings.invertmask2) m=1.0f-m;
+                    i=i*m;
+                }
+                float hval=GetHeightValue(hx,hz);
+                float newhval=hval+(brush.max-hval)*i;
+                SetHeightValue(hx,hz,newhval);
+
+				float wt=GetWaterValue(hx,hz);
+				float v=std::max(0.0f, std::min(1.0f, (wt-newhval)*16.0f));
+				waterdepth_->SetPixel(hx,hz,Color(v,0,0));
+
+            }
+        }
+    }
+
+    terrain_->SetHeightMap(hmap_);
+	heightTex_->SetData(hmap_,false);
+	waterdepthtex_->SetData(waterdepth_,false);
+}
+
 
 void TerrainEdit::ApplyBlendBrush(float x, float z, int layer, float dt, BrushSettings &brush, MaskSettings &masksettings)
 {
@@ -722,6 +1057,105 @@ void TerrainEdit::ApplyBlendBrush(float x, float z, int layer, float dt, BrushSe
                 float i=((d-rad)/(brush.hardness*rad-rad));
                 i=std::max(0.0f, std::min(1.0f, i));
                 i=i*dt*brush.power;
+                if(masksettings.usemask0)
+                {
+                    float m=mask_->GetPixelBilinear((float)(hx)/(float)(blend0_->GetWidth()), (float)(hz)/(float)(blend0_->GetHeight())).r_;
+                    if(masksettings.invertmask0) m=1.0f-m;
+                    i=i*m;
+                }
+                if(masksettings.usemask1)
+                {
+                    float m=mask_->GetPixelBilinear((float)(hx)/(float)(blend0_->GetWidth()), (float)(hz)/(float)(blend0_->GetHeight())).g_;
+                    if(masksettings.invertmask1) m=1.0f-m;
+                    i=i*m;
+                }
+                if(masksettings.usemask2)
+                {
+                    float m=mask_->GetPixelBilinear((float)(hx)/(float)(blend0_->GetWidth()), (float)(hz)/(float)(blend0_->GetHeight())).b_;
+                    if(masksettings.invertmask2) m=1.0f-m;
+                    i=i*m;
+                }
+                Color col0=blend0_->GetPixel(hx,hz);
+                Color col1=blend1_->GetPixel(hx,hz);
+                if(layer==0)
+                {
+                    col0.r_=col0.r_+i*(brush.max-col0.r_);
+                }
+                else if(layer==1)
+                {
+                    col0.g_=col0.g_+i*(brush.max-col0.g_);
+                }
+                else if(layer==2)
+                {
+                    col0.b_=col0.b_+i*(brush.max-col0.b_);
+                }
+                else if(layer==3)
+                {
+                    col0.a_=col0.a_+i*(brush.max-col0.a_);
+                }
+                else if(layer==4)
+                {
+                    col1.r_=col1.r_+i*(brush.max-col1.r_);
+                }
+                else if(layer==5)
+                {
+                    col1.g_=col1.g_+i*(brush.max-col1.g_);
+                }
+                else if(layer==6)
+                {
+                    col1.b_=col1.b_+i*(brush.max-col1.b_);
+                }
+                else
+                {
+                    col1.a_=col1.a_+i*(brush.max-col1.a_);
+                }
+                BalanceColors(col0, col1, layer);
+                blend0_->SetPixel(hx,hz,col0);
+                blend1_->SetPixel(hx,hz,col1);
+                //LOGINFO(String(col.r_)+String(",")+String(col.g_));
+            }
+        }
+    }
+
+    blendtex0_->SetData(blend0_, false);
+    blendtex1_->SetData(blend1_, false);
+}
+
+void TerrainEdit::ApplyBlendBrushAlpha(float x, float z, int layer, float dt, BrushSettings &brush, MaskSettings &masksettings, Image &alpha, float angle)
+{
+    if(!terrain_) return;
+
+    Vector2 normalized=WorldToNormalized(Vector3(x,0,z));
+    float ratio=((float)blend0_->GetWidth()/(float)hmap_->GetWidth());
+    int ix=(int)(normalized.x_*(float)(blend0_->GetWidth()-1));
+    int iy=(int)(normalized.y_*(float)(blend0_->GetHeight()-1));
+    iy=blend0_->GetHeight()-iy;
+    float rad=brush.radius*ratio;
+    int sz=(int)rad+1;
+
+    for(int hx=ix-sz; hx<=ix+sz; ++hx)
+    {
+        for(int hz=iy-sz; hz<=iy+sz; ++hz)
+        {
+            if(hx>=0 && hx<blend0_->GetWidth() && hz>=0 && hz<blend0_->GetHeight())
+            {
+                float dx=(float)hx-(float)ix;
+                float dz=(float)hz-(float)iy;
+                float d=std::sqrt(dx*dx+dz*dz);
+                float i=((d-rad)/(brush.hardness*rad-rad));
+                i=std::max(0.0f, std::min(1.0f, i));
+
+				float anx=dx/rad;
+				float any=dz/rad;
+				float alphanx = anx*std::cos(angle) - any*std::sin(angle);
+				float alphany = any*std::cos(angle) + anx*std::sin(angle);
+				alphanx=alphanx*0.5+0.5;
+				alphany=alphany*0.5+0.5;
+				alphanx=std::max(0.0f, std::min(1.0f, alphanx));
+				alphany=std::max(0.0f, std::min(1.0f, alphany));
+				float alphapower=alpha.GetPixelBilinear(alphanx,alphany).r_;
+
+                i=i*dt*brush.power*alphapower;
                 if(masksettings.usemask0)
                 {
                     float m=mask_->GetPixelBilinear((float)(hx)/(float)(blend0_->GetWidth()), (float)(hz)/(float)(blend0_->GetHeight())).r_;
@@ -826,6 +1260,58 @@ void TerrainEdit::ApplyMaskBrush(float x, float z, int which, float dt, BrushSet
     masktex_->SetData(mask_, false);
 }
 
+void TerrainEdit::ApplyMaskBrushAlpha(float x, float z, int which, float dt, BrushSettings &brush, MaskSettings &masksettings, Image &alpha, float angle)
+{
+    if(!terrain_) return;
+
+    Vector2 normalized=WorldToNormalized(Vector3(x,0,z));
+    float ratio=((float)mask_->GetWidth()/(float)hmap_->GetWidth());
+    int ix=(int)(normalized.x_*(float)(mask_->GetWidth()-1));
+    int iy=(int)(normalized.y_*(float)(mask_->GetHeight()-1));
+    iy=mask_->GetHeight()-iy;
+    float rad=brush.radius*ratio;
+    int sz=(int)rad+1;
+
+    for(int hx=ix-sz; hx<=ix+sz; ++hx)
+    {
+        for(int hz=iy-sz; hz<=iy+sz; ++hz)
+        {
+            if(hx>=0 && hx<mask_->GetWidth() && hz>=0 && hz<mask_->GetHeight())
+            {
+                float dx=(float)hx-(float)ix;
+                float dz=(float)hz-(float)iy;
+                float d=std::sqrt(dx*dx+dz*dz);
+                float i=((d-rad)/(brush.hardness*rad-rad));
+                i=std::max(0.0f, std::min(1.0f, i));
+				float anx=dx/rad;
+				float any=dz/rad;
+
+				float alphanx = anx*std::cos(angle) - any*std::sin(angle);
+				float alphany = any*std::cos(angle) + anx*std::sin(angle);
+
+				alphanx=alphanx*0.5+0.5;
+				alphany=alphany*0.5+0.5;
+				alphanx=std::max(0.0f, std::min(1.0f, alphanx));
+				alphany=std::max(0.0f, std::min(1.0f, alphany));
+				float alphapower=alpha.GetPixelBilinear(alphanx,alphany).r_;
+
+                i=i*dt*brush.power*alphapower;
+
+                Color col=mask_->GetPixel(hx,hz);
+                if(which==0)
+                    col.r_=col.r_+i*((1.0f-brush.max)-col.r_);
+                else if(which==1)
+                    col.g_=col.g_+i*((1.0f-brush.max)-col.g_);
+                else
+                    col.b_=col.b_+i*((1.0f-brush.max)-col.b_);
+                mask_->SetPixel(hx,hz,col);
+            }
+        }
+    }
+
+    masktex_->SetData(mask_, false);
+}
+
 void TerrainEdit::ApplySmoothBrush(float x, float z, float dt, BrushSettings &brush, MaskSettings &masksettings)
 {
     static float kernel[81]=
@@ -886,6 +1372,7 @@ void TerrainEdit::ApplySmoothBrush(float x, float z, float dt, BrushSettings &br
         }
     }
     terrain_->SetHeightMap(hmap_);
+	heightTex_->SetData(hmap_,false);
 }
 
 void TerrainEdit::SetBrushCursorHeight(CustomGeometry *brush, float groundx, float groundz)
@@ -1075,7 +1562,7 @@ void TerrainEdit::SetMaterialSettings(bool triplanar, bool smoothing, bool norma
 			material_=cache->GetResource<Material>("Materials/TerrainEdit8Bump.xml");
 		else
 			material_=cache->GetResource<Material>("Materials/TerrainEdit8.xml");
-			
+
     terrain_->SetMaterial(material_);
     material_->SetTexture(TU_DIFFUSE, blendtex0_);
     material_->SetTexture(TU_NORMAL, blendtex1_);
@@ -1088,19 +1575,25 @@ void TerrainEdit::SaveHeightMap(const String &filename)
 	hmap_->SavePNG(filename);
 }
 
+void TerrainEdit::SaveWaterMap(const String &filename)
+{
+	if(!waterMap_) return;
+	waterMap_->SavePNG(filename);
+}
+
 void TerrainEdit::SaveTerrainNormalMap(const String &filename)
 {
 	if(!hmap_ || !terrain_) return;
 	Image img(terrain_->GetContext());
 	img.SetSize(hmap_->GetWidth(), hmap_->GetHeight(),3);
-	
+
 	for(int x=0; x<hmap_->GetWidth(); ++x)
 	{
 		for(int y=0; y<hmap_->GetHeight(); ++y)
 		{
 			float nx=(float)x/(float)(hmap_->GetWidth());
 			float ny=(float)y/(float)(hmap_->GetHeight());
-			
+
 			Vector3 world=NormalizedToWorld(Vector2(nx,ny));
 			Vector3 norm=terrain_->GetNormal(world);
 			img.SetPixel(x,y,Color(norm.x_*0.5f + 0.5f, norm.z_*0.5f+0.5f, 1.0));
@@ -1132,12 +1625,21 @@ void TerrainEdit::LoadHeightMap(const String &filename)
 	if(!terrain_) return;
 	LoadImage(terrain_->GetContext(), hmap_, filename.CString());
 	terrain_->SetHeightMap(hmap_);
+	heightTex_->SetData(hmap_,false);
+}
+
+void TerrainEdit::LoadWaterMap(const String &filename)
+{
+	if(!water_) return;
+	LoadImage(water_->GetContext(), waterMap_, filename.CString());
+	water_->SetHeightMap(waterMap_);
+	BuildWaterDepthTexture();
 }
 
 void TerrainEdit::LoadBlend0(const String &filename)
 {
 	if(!terrain_) return;
-	LoadImage(terrain_->GetContext(), blend0_, filename.CString()); 
+	LoadImage(terrain_->GetContext(), blend0_, filename.CString());
 	blendtex0_->SetData(blend0_,false);
 }
 
@@ -1151,7 +1653,7 @@ void TerrainEdit::LoadBlend1(const String &filename)
 void TerrainEdit::LoadMask(const String &filename)
 {
 	if(!terrain_) return;
-	LoadImage(terrain_->GetContext(), mask_, filename.CString()); 
+	LoadImage(terrain_->GetContext(), mask_, filename.CString());
 	masktex_->SetData(mask_,false);
 }
 
@@ -1202,11 +1704,37 @@ float TerrainEdit::DoAmbientOcclusion(Vector2 tcoord, Vector2 uv, Vector3 p, Vec
 	return std::max(0.0f, cnorm.DotProduct(v)-bias)*(1.0f/(1.0f+d))*intensity;
 }
 
+float TerrainEdit::DoAmbientOcclusion2(int x, int y, int radius)
+{
+    int halfrad=radius/2+1;
+	float occ=0.0f;
+	float ht=GetHeightValue(x,y);
+
+	for(int nx=x-halfrad; nx<=x+halfrad; ++nx)
+	{
+		for(int ny=y-halfrad; ny<=y+halfrad; ++ny)
+		{
+			if(nx>=0 && nx<hmap_->GetWidth() && ny>=0 && ny<hmap_->GetHeight())
+			{
+			    float dx=(float)x-(float)nx;
+			    float dy=(float)y-(float)ny;
+				float dist=std::sqrt(dx*dx+dy*dy);
+				float rscale=std::max(0.0f, ((float)radius-dist)/(float)radius);
+				float dht=GetHeightValue(nx,ny);
+				//float delta=std::max(0.0f, dht-ht);
+				float delta=dht-ht;
+				occ += delta*rscale;
+			}
+		}
+	}
+	return occ;
+}
+
 void TerrainEdit::GetCavityMap(CArray2Dd &buffer, float sampleradius, float scale, float bias, float intensity, unsigned int iterations)
 {
 	unsigned int tw=hmap_->GetWidth();
     unsigned int th=hmap_->GetHeight();
-	
+
 	buffer.resize(tw,th);
 	Vector2 vecs[4]={{0,1},{0,-1},{1,0},{-1,0}};
 	KISS rnd;
@@ -1228,7 +1756,7 @@ void TerrainEdit::GetCavityMap(CArray2Dd &buffer, float sampleradius, float scal
 			Vector3 normal((p1-p2)/(pixsize*10.0f),(p3-p4)/(pixsize*10.0f),1.0);
 			normal.Normalize();
 			float ao=0.0f;
-			
+
 			for(unsigned int in=0; in<iterations; ++in)
 			{
 				float theta=(2.0f*3.141592f)*(float)rnd.get01();
@@ -1237,7 +1765,7 @@ void TerrainEdit::GetCavityMap(CArray2Dd &buffer, float sampleradius, float scal
 				{
 					Vector2 coord1=rot(vecs[j],randvec)*sampleradius;
 					Vector2 coord2=Vector2(coord1.x_*0.707f-coord1.y_*0.707f, coord1.x_*0.707f+coord1.y_*0.707f);
-				
+
 					ao += DoAmbientOcclusion(nrm,coord1*0.25, pos, normal, scale, bias, intensity);
 					ao += DoAmbientOcclusion(nrm,coord2*0.5, pos, normal, scale, bias, intensity);
 					ao += DoAmbientOcclusion(nrm,coord1*0.75, pos, normal, scale, bias, intensity);
@@ -1250,11 +1778,141 @@ void TerrainEdit::GetCavityMap(CArray2Dd &buffer, float sampleradius, float scal
 	}
 }
 
+void TerrainEdit::GetCavityMap2(CArray2Dd &buffer, int radius)
+{
+    int tw=hmap_->GetWidth();
+	int th=hmap_->GetHeight();
+
+	buffer.resize(tw,th);
+
+	for(int y=0; y<th; ++y)
+	{
+		for(int x=0; x<tw; ++x)
+		{
+			buffer.set(x,y,DoAmbientOcclusion2(x,y,radius));
+		}
+	}
+	buffer.scaleToRange(0.0f,1.0f);
+}
+
 Vector3 TerrainEdit::GetTerrainSpacing()
 {
 	if(!terrain_) return Vector3();
 	return terrain_->GetSpacing();
 }
+
+bool NeighborBasins(CArray2Dd &arr, CArray2Dd &W, float E, int x, int y)
+{
+	bool something_done=false;
+	for(int i=-1; i<=1; ++i)
+	{
+		for(int j=-1; j<=1; ++j)
+		{
+			if(i!=0 || j!=0)
+			{
+				if(arr.get(x,y)>=W.get(x+i,y+j)+E)
+				{
+					W.set(x,y,arr.get(x,y));
+					return true;
+				}
+				if(W.get(x,y)>W.get(x+i,y+j)+E)
+				{
+					W.set(x,y,W.get(x+i,y+j)+E);
+					something_done=true;
+				}
+			}
+		}
+	}
+	return something_done;
+}
+
+void FillBasins(CArray2Dd &arr, float E)
+{
+	// A fast, simple and versatile algorithm to fill the depressions of digital elevation models Olivier Planchon, Frederic Darboux
+	// http://horizon.documentation.ird.fr/exl-doc/pleins_textes/pleins_textes_7/sous_copyright/010031925.pdf
+	CArray2Dd W(arr.width(), arr.height());
+
+	float mn=arr.getMin();
+	float mx=arr.getMax();
+	// Stage 1
+	for(int x=0; x<arr.width(); ++x)
+	{
+		for(int y=0; y<arr.height(); ++y)
+		{
+			if(x==0 || y==0 || x==arr.width()-1 || y==arr.height()-1) W.set(x,y,arr.get(x,y));
+			else W.set(x,y,mx+1.0);
+		}
+	}
+
+	// Stage 2
+	int w=arr.width();
+	int h=arr.height();
+
+	int noffsets[8]=
+	{
+		-(w+1),
+		-w,
+		-(w-1),
+		-1,
+		1,
+		+(w-1),
+		+w,
+		+(w+1)
+	};
+
+	for(;;)
+	{
+		bool something_done=false;
+		for(int i=0; i<arr.width()*arr.height(); ++i)
+		{
+
+			if(arr.getIndexed(i)==W.getIndexed(i)) continue;
+
+			for(int nb=0; nb<8; ++nb)
+			{
+				double nval=W.getIndexed(i+noffsets[nb]);
+				if(arr.getIndexed(i)>=nval+E)
+				{
+					W.setIndexed(i,arr.getIndexed(i));
+					something_done=true;
+					break;
+				}
+				double hval=nval+E;
+				if((W.getIndexed(i) > hval) && (hval > arr.getIndexed(i)))
+				{
+					W.setIndexed(i,hval);
+					something_done=true;
+				}
+			}
+		}
+		if(!something_done) break;
+	}
+
+	arr.scaleToRange(mn,mx);
+	for(int x=0; x<arr.width(); ++x)
+	{
+		for(int y=0; y<arr.height(); ++y)
+		{
+			arr.set(x,y,W.get(x,y));
+		}
+	}
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/////////////////////// Deprecated
 
 bool LoadImage(Context *c, Image *i, const char *fname)
 {
@@ -1787,7 +2445,7 @@ Vector2 RenderANLKernelToImage(Image *buffer, CKernel *kernel, float lowrange, f
 			if(counts[c]>maxcount) maxcount=c;
 			if(counts[c]<mincount) mincount=c;
 		}
-		
+
 		th(1.7)
 		histogram->Clear(Color(0,0,0));
 		for(int x=0; x<histogram->GetWidth(); ++x)
@@ -1822,7 +2480,7 @@ void RenderANLKernelToImageRGBA(Image *buffer, CKernel *kernel,int seamlessmode,
     int w=buffer->GetWidth();
     int h=buffer->GetHeight();
     img.resize(w,h);
-	
+
 	if(!usez)
 		mapRGBA2DNoZ(seamlessmode, img, *kernel, SMappingRanges(0,scalex,0,scaley,0,1), kernel->lastIndex());
 	else
@@ -2296,16 +2954,16 @@ void BuildQuadStripRoad(RasterVertexList *curve, int steps, float width, float l
 
     Vector<Vector3> points, tangents;
 	Vector<float> distances;
-	
+
     ll.Solve(points, tangents, distances, steps*(ll.NumPoints()-1), 0.1);
-	
+
 	Vector<Vector3> quadpoints;
 	Vector<float> quaddistances;
-	
+
 	BuildQuadStripB(points,tangents,distances,quadpoints,quaddistances,width, Vector3(0,1,0));
 	geom->Clear();
 	geom->SetNumGeometries(1);
-	
+
 	geom->BeginGeometry(0,TRIANGLE_LIST);
 	for(unsigned int c=0; c<quadpoints.Size()-4; c+=2)
 	{
@@ -2316,13 +2974,13 @@ void BuildQuadStripRoad(RasterVertexList *curve, int steps, float width, float l
 		Vector3 right1=tang1.CrossProduct(Vector3(0,1,0));
 		right1.Normalize();
 		Vector3 norm1=right1.CrossProduct(tang1);
-		
+
 		Vector3 tang2=tangents[lineindex+1];
 		tang2.Normalize();
 		Vector3 right2=tang2.CrossProduct(Vector3(0,1,0));
 		right2.Normalize();
 		Vector3 norm2=right2.CrossProduct(tang2);
-		
+
 		geom->DefineVertex(quadpoints[c]);
 		geom->DefineNormal(norm1);
 		geom->DefineTexCoord(Vector2(0,quaddistances[c]*lengthscale));
@@ -2332,7 +2990,7 @@ void BuildQuadStripRoad(RasterVertexList *curve, int steps, float width, float l
 		geom->DefineVertex(quadpoints[c+2]);
 		geom->DefineNormal(norm2);
 		geom->DefineTexCoord(Vector2(0,quaddistances[c+2]*lengthscale));
-		
+
 		geom->DefineVertex(quadpoints[c+1]);
 		geom->DefineNormal(norm1);
 		geom->DefineTexCoord(Vector2(1,quaddistances[c+1]*lengthscale));
@@ -2343,9 +3001,9 @@ void BuildQuadStripRoad(RasterVertexList *curve, int steps, float width, float l
 		geom->DefineNormal(norm2);
 		geom->DefineTexCoord(Vector2(1,quaddistances[c+3]*lengthscale));
 	}
-	
+
 	geom->Commit();
-	
+
 }
 
 void BuildQuadStripVarying(RasterVertexList *in, RasterVertexList *out, float startwidth, float endwidth)

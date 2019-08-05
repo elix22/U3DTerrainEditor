@@ -77,7 +77,7 @@ function NodeGraphUI:Start()
 	--self.pane:AddChild(self.createnodemenu)
 
 	self.pane=ui.root:CreateChild("UIElement")
-	self.pane:SetSize(graphics.width, graphics.height)
+	self.pane:SetClipChildren(true)
 	self.closetext=self.pane:CreateChild("Text")
 	self.closetext:SetStyle("Text", cache:GetResource("XMLFile","UI/DefaultStyle.xml"))
 	self.closetext:SetFontSize(20)
@@ -85,8 +85,8 @@ function NodeGraphUI:Start()
 	self.pane.visible=false
 
 
-	self.testmenu=self:CreateNodeCreateMenu(self.pane)
-	self.testmenu:SetPosition(100,100)
+	self.testmenu=self:CreateNodeCreateMenu(ui.root)
+
 	self.testmenu.visible=false
 
 
@@ -106,8 +106,15 @@ function NodeGraphUI:Start()
 	self:SubscribeToEvent(self.nodegroupslist:GetChild("Edit", true), "Pressed", "NodeGraphUI:HandleEditGroup")
 	self:SubscribeToEvent(self.nodegroupslist:GetChild("Map", true), "Pressed", "NodeGraphUI:HandleMapGroup")
 
-	self.nodegroupslist:SetPosition(IntVector2(graphics.width-self.nodegroupslist.width, graphics.height-self.nodegroupslist.height))
+	self:SubscribeToEvent(self.nodegroupslist:GetChild("List",true), "ItemSelected", "NodeGraphUI:HandleGroupSelected")
+
+	--self.nodegroupslist:SetPosition(IntVector2(graphics.width-self.nodegroupslist.width, graphics.height-self.nodegroupslist.height))
+	self.nodegroupslist:SetPosition(IntVector2(0, graphics.height-self.nodegroupslist.height))
 	self.nodegroupslist.visible=false
+
+	self.pane:SetSize(graphics.width-self.nodegroupslist.width, graphics.height-64)
+	self.testmenu:SetPosition(IntVector2(0,64))
+	self.pane:SetPosition(IntVector2(self.nodegroupslist.width,64))
 
 	self.nodegroupcounter=0
 
@@ -115,6 +122,7 @@ end
 
 function NodeGraphUI:Activate()
 	self.nodegroupslist.visible=true
+	--self.pane:SetPosition(Vector2(0,64))
 end
 
 function NodeGraphUI:Deactivate()
@@ -124,6 +132,7 @@ function NodeGraphUI:Deactivate()
 		self.nodegroup.pane.focus=false
 		if self.closetext then self.closetext:Remove() self.closetext=nil end
 	end
+	self.testmenu.visible=false
 end
 
 function NodeGraphUI:Clear()
@@ -285,6 +294,7 @@ function NodeGraphUI:HandleNewGroup(eventType, eventData)
 	self:SubscribeToEvent(self.newnodegroupdlg:GetChild("Cancel",true), "Pressed", "NodeGraphUI:HandleNewGroupCancel")
 	local w,h=self.newnodegroupdlg:GetWidth(), self.newnodegroupdlg:GetHeight()
 	self.newnodegroupdlg:SetPosition(IntVector2(graphics.width/2 - w/2, graphics.height/2 - w/2))
+	ui:SetFocusElement(self.newnodegroupdlg:GetChild("GroupName", true),false)
 end
 
 function NodeGraphUI:HandleNewGroupCancel(eventType, eventData)
@@ -307,7 +317,9 @@ function NodeGraphUI:HandleNewGroupAccept(eventType, eventData)
 		return
 	end
 
+	self:HideGroup()
 	self:CreateNodeGroup(name)
+	self:ActivateGroup(self.nodegroup)
 	self.newnodegroupdlg:Remove()
 	self.newnodegroupdlg=nil
 end
@@ -323,9 +335,17 @@ end
 function NodeGraphUI:HandleEditGroup(eventType, eventData)
 	local which=self.nodegroupslist:GetChild("List",true).selection
 	if which==-1 then return end
-	self.nodegroup=self.nodegroups[which+1]
-	if not self.nodegroup then print("wut: "..which..","..self.nodegroupslist:GetChild("List",true):GetNumItems()..","..#self.nodegroups) return end
-	self:ActivateGroup(self.nodegroup)
+	local nodegroup=self.nodegroups[which+1]
+	if not nodegroup then print("wut: "..which..","..self.nodegroupslist:GetChild("List",true):GetNumItems()..","..#self.nodegroups) return end
+	self:ActivateGroup(nodegroup)
+end
+
+function NodeGraphUI:HandleGroupSelected(eventType, eventData)
+	local which=self.nodegroupslist:GetChild("List",true).selection
+	if which==-1 then return end
+	local nodegroup=self.nodegroups[which+1]
+	if not nodegroup then print("wat: "..which..","..self.nodegroupslist:GetChild("List",true):GetNumItems()..","..#self.nodegroups) return end
+	self:ActivateGroup(nodegroup)
 end
 
 function NodeGraphUI:HandleMapGroup(eventType, eventData)
@@ -370,7 +390,7 @@ function NodeGraphUI:CreateNodeGroup(name)
 	}
 	nodegroup.pane=self.pane:CreateChild("Window")
 	nodegroup.pane.size=IntVector2(graphics.width*2, graphics.height*2)
-	nodegroup.pane.position=IntVector2(-graphics.width/2, -graphics.height/2)
+	nodegroup.pane.position=IntVector2(-graphics.width/2-128, -graphics.height/2)
 	nodegroup.pane:SetImageRect(IntRect(208,0,223,15))
 	nodegroup.pane:SetImageBorder(IntRect(4,4,4,4))
 	nodegroup.pane:SetTexture(cache:GetResource("Texture2D", "Textures/UI_modified.png"))
@@ -488,8 +508,8 @@ end
 
 function NodeGraphUI:ActivateGroup(nodegroup)
 	if self.nodegroup then
-		nodegroup.pane.visible=false
-		nodegroup.pane.focus=false
+		self.nodegroup.pane.visible=false
+		self.nodegroup.pane.focus=false
 
 	end
 	self.nodegroup=nodegroup
@@ -501,9 +521,9 @@ function NodeGraphUI:ActivateGroup(nodegroup)
 	--self.createnodemenu.position=IntVector2(-self.nodegroup.pane.position.x,-self.nodegroup.pane.position.y+graphics.height-self.createnodemenu.height)
 
 	self.testmenu.visible=true
-	nodegroup.pane:AddChild(self.testmenu)
+	--nodegroup.pane:AddChild(self.testmenu)
 	--nodegroup.pane:AddChild(self.closetext)
-	self.testmenu.position=IntVector2(-self.nodegroup.pane.position.x+100, -self.nodegroup.pane.position.y+100)
+	--self.testmenu.position=IntVector2(-self.nodegroup.pane.position.x+100, -self.nodegroup.pane.position.y+100)
 end
 
 function NodeGraphUI:HandleCloseCreateNodeMenu(eventType, eventData)
@@ -676,10 +696,10 @@ function NodeGraphUI:HandleStore(eventType, eventData)
 	if not found then
 		table.insert(nodecategories.user, name)
 	end
-	self.testmenu:Remove()
-	self.testmenu=nil
-	self.testmenu=self:CreateNodeCreateMenu(self.pane)
-	self.testmenu:SetPosition(100,100)
+	--self.testmenu:Remove()
+	--self.testmenu=nil
+	--self.testmenu=self:CreateNodeCreateMenu(self.pane)
+	--self.testmenu:SetPosition(100,100)
 end
 
 function NodeGraphUI:HandleExecute(eventType, eventData)

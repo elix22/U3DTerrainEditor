@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 #
 # Copyright (c) 2008-2019 the Urho3D project.
 #
@@ -20,17 +21,9 @@
 # THE SOFTWARE.
 #
 
-# Find RoarAudio development library
-#
-#  SNDIO_FOUND
-#  SNDIO_INCLUDE_DIRS
-#  SNDIO_LIBRARIES
-#
+$(dirname $0)/cmake_generic.sh "$@" -G "Eclipse CDT4 - Unix Makefiles"
 
-find_path (SNDIO_INCLUDE_DIRS NAMES RoarAudio.h DOC "RoarAudio include directory")
-find_library (SNDIO_LIBRARIES NAMES RoarAudio DOC "RoarAudio library")
+# After importing the generated project into Eclipse workspace, set the [Build], [Subprojects], and [Targets] linked resources property as 'Derived'
+# to exclude the derived resources in those folders from being listed in the Open Resource and Search Result list
 
-include (FindPackageHandleStandardArgs)
-find_package_handle_standard_args (RoarAudio REQUIRED_VARS SNDIO_LIBRARIES SNDIO_INCLUDE_DIRS FAIL_MESSAGE "Could NOT find RoarAudio development library")
-
-mark_as_advanced (SNDIO_INCLUDE_DIRS SNDIO_LIBRARIES)
+# vi: set ts=4 sw=4 expandtab:

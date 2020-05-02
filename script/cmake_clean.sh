@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 #
 # Copyright (c) 2008-2019 the Urho3D project.
 #
@@ -20,17 +21,9 @@
 # THE SOFTWARE.
 #
 
-# Find RoarAudio development library
-#
-#  SNDIO_FOUND
-#  SNDIO_INCLUDE_DIRS
-#  SNDIO_LIBRARIES
-#
+# Clean the CMake cache and CMake generated files in the build tree
+if [[ "$1" ]] && [[ -f "$1"/CMakeCache.txt ]]; then BUILD=$1; elif [[ -f $(pwd)/CMakeCache.txt ]]; then BUILD=$(pwd); else echo Usage: ${0##*/} /path/to/build-tree; exit 1; fi
+rm -rf "$BUILD"/{CMakeCache.txt,CMakeFiles}
+touch "$BUILD"/CMakeCache.txt
 
-find_path (SNDIO_INCLUDE_DIRS NAMES RoarAudio.h DOC "RoarAudio include directory")
-find_library (SNDIO_LIBRARIES NAMES RoarAudio DOC "RoarAudio library")
-
-include (FindPackageHandleStandardArgs)
-find_package_handle_standard_args (RoarAudio REQUIRED_VARS SNDIO_LIBRARIES SNDIO_INCLUDE_DIRS FAIL_MESSAGE "Could NOT find RoarAudio development library")
-
-mark_as_advanced (SNDIO_INCLUDE_DIRS SNDIO_LIBRARIES)
+# vi: set ts=4 sw=4 expandtab:

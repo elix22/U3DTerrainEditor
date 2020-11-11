@@ -239,7 +239,7 @@ void NodeGraphLink::GetBatch(UIBatch &batch)
     //UIBatch::AddOrMerge(batch, batches);
 }
 
-void NodeGraphLink::SetImageRect(IntRect &rect)
+void NodeGraphLink::SetImageRect(const IntRect &rect)
 {
     imageRect_=IntRect(rect);
 }
